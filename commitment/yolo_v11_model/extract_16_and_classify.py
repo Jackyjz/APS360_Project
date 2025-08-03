@@ -4,11 +4,22 @@ import glob
 from pathlib import Path
 import shutil
 
-# === Step 1: Load model ===
-model = YOLO('commitment/yolo_v11_model/best.pt')
-
-# === Step 2: Get all video files ===
+# === Config Paths ===
 video_dir = 'C:/Users/jacky/Downloads/cxy/penalty kicks edited 208/0xx'
+
+base_dir = os.path.join(video_dir, "processed_data")  # You can name it anything you like
+
+model_path = "C:/Users/jacky/aps360/commitment/yolo_v11_model/best.pt"
+
+img_root = os.path.join(base_dir, 'img')   # Per-class image folders
+txt_dir = os.path.join(base_dir, 'txt')    # Flattened txt labels
+os.makedirs(img_root, exist_ok=True)
+os.makedirs(txt_dir, exist_ok=True)
+
+# === Step 1: Load YOLO model ===
+model = YOLO(model_path)
+
+# === Step 2: Find all videos ===
 video_paths = glob.glob(os.path.join(video_dir, '*.mp4'))
 
 # === Step 3: Predict on each video ===
@@ -16,7 +27,6 @@ for video_path in video_paths:
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     print(f"🎥 Processing {video_name}...")
 
-    # Run YOLOv11 on video
     results = model.predict(
         source=video_path,
         conf=0.25,
@@ -48,7 +58,7 @@ for video_path in video_paths:
             elif total >= 8:
                 keep_imgs = all_imgs[-8:]
             else:
-                keep_imgs = all_imgs  # keep all
+                keep_imgs = all_imgs
 
             for img in all_imgs:
                 if img not in keep_imgs:
@@ -69,20 +79,17 @@ for video_path in video_paths:
                 os.remove(os.path.join(label_dir, label))
         print(f"🧹 Labels trimmed to last 16 for {video_name}.")
 
-print("✅ All videos processed. Up to 16 crops per class and 16 labels kept per video.")
+print("✅ YOLO done. Now merging into img/{class}/ and txt/ ...")
 
-# === Step 6: Merge all crops by class ===
-predict_root = "runs/detect"
-merged_root = "all_crops"
-os.makedirs(merged_root, exist_ok=True)
-
-predict_folders = glob.glob(os.path.join(predict_root, "*"))
+# === Step 6: Merge all crops and labels ===
+predict_folders = glob.glob(os.path.join("runs/detect", "*"))
 merged_count = 0
 
 for predict_path in predict_folders:
     crop_dir = os.path.join(predict_path, "crops")
+    label_dir = os.path.join(predict_path, "labels")
+
     if not os.path.isdir(crop_dir):
-        print(f"⚠️ No crops found in: {predict_path}")
         continue
 
     for class_name in os.listdir(crop_dir):
@@ -90,20 +97,31 @@ for predict_path in predict_folders:
         if not os.path.isdir(class_crop_path):
             continue
 
-        dest_class_dir = os.path.join(merged_root, class_name)
-        os.makedirs(dest_class_dir, exist_ok=True)
+        # Destination class folder: commitment/img/{class}/
+        class_output_dir = os.path.join(img_root, class_name)
+        os.makedirs(class_output_dir, exist_ok=True)
 
         for file in os.listdir(class_crop_path):
             src_file = os.path.join(class_crop_path, file)
+            base_name = file.split('.')[0]
             video_folder = Path(predict_path).name
-            video_safe = video_folder.replace(" ", "_").replace("(", "").replace(")", "")
-            dest_filename = f"{video_safe}_{file}"
-            dest_path = os.path.join(dest_class_dir, dest_filename)
+            safe_prefix = video_folder.replace(" ", "_").replace("(", "").replace(")", "")
+            output_name = f"{safe_prefix}_{base_name}"
 
             try:
-                shutil.copy2(src_file, dest_path)
-                merged_count += 1 
-            except Exception as e:
-                print(f"❌ Error copying {src_file} → {dest_path}: {e}")
+                # Copy image to img/{class}/
+                dest_img = os.path.join(class_output_dir, output_name + ".jpg")
+                shutil.copy2(src_file, dest_img)
 
-print(f"✅ Merging complete. {merged_count} crops copied to 'all_crops/'")
+                # Copy label to flat txt/ folder
+                label_file = os.path.join(label_dir, base_name + ".txt")
+                dest_label = os.path.join(txt_dir, output_name + ".txt")
+                if os.path.exists(label_file):
+                    shutil.copy2(label_file, dest_label)
+
+                merged_count += 1
+
+            except Exception as e:
+                print(f"❌ Error copying from {src_file}: {e}")
+
+print(f"✅ Done. {merged_count} crops merged into img/{{class}}/ and txt/")
